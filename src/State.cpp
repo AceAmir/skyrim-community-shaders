@@ -7,6 +7,7 @@
 #include "ShaderCache.h"
 
 #include "Feature.h"
+#include "Features/Clustered.h"
 
 void State::Draw()
 {
