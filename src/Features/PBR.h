@@ -29,6 +29,7 @@ struct PBR : Feature
 		float GrassDiffuse = 0.3f;
 		float WindIntensity = 0.15f;
 		float WindSpeed = 0.15f;
+		float WindScale = 0.15f;
 		float Exposure = 1.0f;
 		float PointLightAttenuation = 1.0f;
 		float PointLightIntensity = 1.0f;
