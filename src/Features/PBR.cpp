@@ -18,7 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassSpecular,
 	GrassDiffuse,
 	WindIntensity,
-	WindScale,
+	WindSpeed,
 	Exposure,
 	PointLightAttenuation,
 	PointLightIntensity,
@@ -47,7 +47,7 @@ void PBR::DrawSettings()
 		ImGui::SliderFloat("Grass Specular", &settings.GrassSpecular, 0.0f, 1.0f);
 		ImGui::SliderFloat("Grass Diffuse", &settings.GrassDiffuse, 0.0f, 1.0f);
 		ImGui::SliderFloat("Wind Intensity", &settings.WindIntensity, 0.0f, 1.0f);
-		ImGui::SliderFloat("Wind Scale", &settings.WindScale, 0.0f, 1.0f);
+		ImGui::SliderFloat("Wind Speed", &settings.WindSpeed, 0.0f, 1.0f);
 		ImGui::SliderFloat("Exposure", &settings.Exposure, 0.0f, 2.0f);
 		ImGui::SliderFloat("PointLight Attenuation", &settings.PointLightAttenuation, 0.0f, 2.0f);
 		ImGui::SliderFloat("PointLight Intensity", &settings.PointLightIntensity, 0.0f, 5.0f);
