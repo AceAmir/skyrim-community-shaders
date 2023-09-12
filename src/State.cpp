@@ -40,6 +40,7 @@ void State::Draw()
 
 void State::Reset()
 {
+	Clustered::GetSingleton()->Reset();
 	for (auto* feature : Feature::GetFeatureList())
 		if (feature->loaded)
 			feature->Reset();
