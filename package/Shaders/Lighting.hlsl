@@ -1,5 +1,9 @@
 #include "Common/FrameBuffer.hlsl"
 #include "Common/MotionBlur.hlsl"
+//Everything has view vect
+#define HAS_VIEW_VECTOR
+#define PBR
+#include "PBR.hlsli"
 
 #if (defined(TREE_ANIM) || defined(LANDSCAPE)) && !defined(VC)
 #	define VC
@@ -399,9 +403,16 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if defined(HAS_VIEW_VECTOR)
 #		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(SKINNED)
-	vsout.ViewVector = EyePosition[eyeIndex].xyz - worldPosition.xyz;
+	//vsout.ViewVector = EyePosition[eyeIndex].xyz - worldPosition.xyz;
+	vsout.ViewVector = WorldEyePosition.xyz - worldPosition.xyz;
 #		else
-	vsout.ViewVector = EyePosition[eyeIndex].xyz - input.Position.xyz;
+	//vsout.ViewVector = EyePosition[eyeIndex].xyz - input.Position.xyz;
+	//World eye position to local eye position
+	row_major float4x3 Tworld = transpose(World[eyeIndex]);
+	row_major float3x3 world3x3 = float3x3(Tworld[0], Tworld[1], Tworld[2]);
+	float3 model_EyePosition = WorldEyePosition.xyz - Tworld[3];
+	model_EyePosition = mul(world3x3, model_EyePosition);
+	vsout.ViewVector = model_EyePosition - input.Position.xyz;
 #		endif
 #	endif  // HAS_VIEW_VECTOR
 
@@ -816,6 +827,7 @@ float3 TransformNormal(float3 normal)
 	return normal * 2 + -1.0.xxx;
 }
 
+/*
 float3 fresnelSchlick(float cosTheta, float3 F0)
 {
 	return F0 + (1 - F0) * pow(saturate(1 - cosTheta), 5);
@@ -888,8 +900,8 @@ float3 GetLightRadiance(float3 N, float3 L, float3 V, float3 F0, float3 original
 	float diffuseValue = OrenNayarDiffuseCoefficient(roughness, N, L, V, NdotL, NdotV);
 	return (kD * diffuseValue * albedo + specular) * saturate(NdotL) * radiance;
 }
-
-float GetLodLandBlendParameter(float3 color)
+*/
+	float GetLodLandBlendParameter(float3 color)
 {
 	float result = saturate(1.6666666 * (dot(color, 0.55.xxx) - 0.4));
 	result = ((result * result) * (3 - result * 2));
@@ -1344,6 +1356,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	// float metallic = rmaoColor.y;
 	// float ao = rmaoColor.z;
 
+	/*
 	float roughness = 1 - glossiness;
 	float metallic = 0;
 #		if defined(ENVMAP)
@@ -1357,6 +1370,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 totalRadiance = 0.0.xxx;
 #	endif  // PBR
+	*/
 
 #	if defined(FACEGEN)
 	baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
@@ -1612,14 +1626,87 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, texProjTmp);
 #	endif  // WORLD_MAP
 
+	#		if defined(PBR)
+	float3 Albedo = baseColor.xyz;
+	float3 DiffuseColor;
+	float3 F0;
+	float roughness;
+	float metallic = 0;
+	float3 FaceN;
+
+#			if defined(HAIR)
+	Albedo *= input.Color.yyy * (TintColor.xyz - 1.0.xxx) + 1.0.xxx;
+#			else
+	Albedo *= input.Color.xyz;
+#			endif  // HAIR
+
+	Albedo = max(Albedo, 0.04);
+
+#			if defined(SPECULAR) || defined(SPARKLE)
+	float SpecularBrightness = saturate(max(SpecularColor.x, max(SpecularColor.y, SpecularColor.z)) * MaterialData.y);
+	roughness = MaxRoughness - (0.885917192625503 + 7.55730183116721 / shininess) * GlossinessScale;
+	roughness = lerp(MaxRoughness, roughness, SpecularBrightness * glossiness.x);
+#			else
+	roughness = lerp(MaxRoughness, MiddleRoughness, glossiness.x);
+#			endif  // SPECULAR || SPARKLE
+
+#			if defined(ENVMAP)
+#				if defined(CPM_AVAILABLE)
+	if (complexMaterial) {
+		roughness = 1 - complexMaterialColor.y;
+		metallic = complexMaterialColor.z;
+	} else
+#				endif  //CPM_AVAILABLE
+	{
+#				if !(defined(MULTI_LAYER_PARALLAX) || defined(EYE) || defined(SOFT_LIGHTING) || defined(RIM_LIGHTING) || defined(BACK_LIGHTING))
+		float4 envMaskColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+		float envMask = (EnvmapData.y * (envMaskColor.x - glossiness.x) + glossiness.x) * (EnvmapData.x * MaterialData.x);
+		float3 envColor = TexEnvSampler.SampleLevel(SampEnvSampler, float3(0, 0, 1), 16).xyz;
+		if (envColor.x > 0.99 || envColor.x < 0.01 || FrameParams.z) {
+			metallic = 0;
+		} else {
+			envColor *= envMask * CubemapToF0;
+			metallic = smoothstep(NonMetalThreshold, MetalThreshold, envMask);
+		}
+		Albedo += envColor * metallic;
+#					if defined(SPECULAR) || defined(SPARKLE)
+		float3 AvgBaseColor = TexColorSampler.SampleLevel(SampColorSampler, float2(0.5, 0.5), 16).xyz;
+		AvgBaseColor += envColor;
+		float AvgBrightness = max(AvgBaseColor.x, max(AvgBaseColor.y, AvgBaseColor.z));
+		AvgBrightness = max(AvgBrightness, 0.01);
+		Albedo *= max(SpecularBrightness * SpecularToF0 * metallic / AvgBrightness, 1);
+#					endif  // SPECULAR || SPARKLE
+#				endif      // ! (MULTI_LAYER_PARALLAX || EYE || SOFT_LIGHTING || RIM_LIGHTING || BACK_LIGHTING)
+	}
+
+#			endif  // ENVMAP
+
+#			if !defined(MODELSPACENORMALS)
+	FaceN = tbn._m02_m12_m22;
+#			else
+	FaceN = modelNormal.xyz;
+#			endif
+
+	DiffuseColor = Albedo * (1 - metallic);
+	F0 = lerp(0.04, Albedo, metallic);
+	PBRStruct PBRstruct = GetPBRStruct(DiffuseColor, F0, roughness, modelNormal.xyz, FaceN, viewDirection);
+#		endif  //defined(PBR) && !defined(CPM_AVAILABLE)
+
+
 	float3 dirLightColor = DirLightColor.xyz;
 	float selfShadowFactor = 1.0f;
+	float dirLightSpecular = outdoor;
 
 	float3 nsDirLightColor = dirLightColor;
 
 #	if defined(DEFSHADOW) && defined(SHADOW_DIR)
 	dirLightColor *= shadowColor.xxx;
+	dirLightSpecular = 1;
 #	endif  // defined (DEFSHADOW) && defined (SHADOW_DIR)
+
+	#		if defined(LODLANDNOISE) || defined(LODLANDSCAPE) || defined(LOD_LAND_BLEND)
+	dirLightSpecular *= GrassSpecular;
+#		endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE) || defined(LOD_LAND_BLEND)
 
 #	if defined(SCREEN_SPACE_SHADOWS)
 	float dirLightSShadow = PrepassScreenSpaceShadows(input.WorldPosition.xyz);
@@ -1654,7 +1741,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 				// (MODELSPACENORMALS))
 
 #	if defined(PBR)
-	totalRadiance += GetLightRadiance(modelNormal.xyz, DirLightDirection.xyz, viewDirection, F0, dirLightColor.xyz, baseColor.xyz, roughness, metallic);
+	//totalRadiance += GetLightRadiance(modelNormal.xyz, DirLightDirection.xyz, viewDirection, F0, dirLightColor.xyz, baseColor.xyz, roughness, metallic);
+	GetLighting(DirLightDirection.xyz, dirLightColor.xyz, dirLightSpecular, PBRstruct);
 #	else
 	float3 diffuseColor = 0.0.xxx;
 	float3 specularColor = 0.0.xxx;
@@ -1778,7 +1866,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #		endif
 
 #		if defined(PBR)
-			totalRadiance += GetLightRadiance(modelNormal.xyz, normalizedLightDirection, viewDirection, F0, lightColor * intensityMultiplier.xxx, baseColor.xyz, roughness, metallic);
+			//totalRadiance += GetLightRadiance(modelNormal.xyz, normalizedLightDirection, viewDirection, F0, lightColor * intensityMultiplier.xxx, baseColor.xyz, roughness, metallic);
+			GetLighting(normalizedLightDirection, lightColor * intensityMultiplier.xxx, 1, PBRstruct);
 #		else
 			float lightAngle = dot(modelNormal.xyz, normalizedLightDirection.xyz);
 			float3 lightDiffuseColor = lightColor * saturate(lightAngle.xxx);
@@ -1916,8 +2005,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 #	endif
 #	if defined(PBR)
 	// float3 ambientColor = 0.03 * baseColor.xyz * ao;
-	float3 ambientColor = (mul(DirectionalAmbient, modelNormal) + IBLParams.yzw * IBLParams.xxx) * baseColor.xyz * ao;
-	float3 color = ambientColor + totalRadiance;
+	//float3 ambientColor = (mul(DirectionalAmbient, modelNormal) + IBLParams.yzw * IBLParams.xxx) * baseColor.xyz * ao;
+	//float3 color = ambientColor + totalRadiance;
+	GetAmbientLighting(DirectionalAmbient, IBLParams, PBRstruct);
+	float3 emitColor = EmitColor;
+#			if defined(GLOWMAP)
+	float3 glowColor = TexGlowSampler.Sample(SampGlowSampler, uv).xyz;
+	emitColor *= glowColor;
+#			endif
+	PBRstruct.SpecularLighting += emitColor * baseColor.xyz;
+	float3 color = GetColor(PBRstruct);
+	float3 vertexColor = color;
 
 	// color = color / (color + 1.0);
 	// color = pow(color, 1.0 / 2.2);
@@ -1977,7 +2075,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace
 
 	float3 layerColor = TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz;
 
+#	if defined(PBR)
+	vertexColor = lerp(vertexColor, PBRstruct.DiffuseLighting * layerColor, PBRstruct.NoV * (1 - baseColor.w));
+#	else
+
 	vertexColor = (saturate(viewNormalAngle) * (1 - baseColor.w)).xxx * ((directionalAmbientColor + lightsDiffuseColor) * (input.Color.xyz * layerColor) - vertexColor) + vertexColor;
+#	endif // PBR
 
 #	endif  // MULTI_LAYER_PARALLAX
 
